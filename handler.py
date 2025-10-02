@@ -1,5 +1,4 @@
 import runpod
-from runpod.serverless.utils import rp_upload
 import os
 import websocket
 import base64
@@ -8,17 +7,56 @@ import uuid
 import logging
 import urllib.request
 import urllib.parse
-import binascii # Import for Base64 error handling
+import binascii
 import subprocess
 import time
 import librosa
+import requests
 # Logging configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Supabase configuration
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_SERVICE_ROLE_KEY = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+SUPABASE_BUCKET_NAME = os.getenv('SUPABASE_BUCKET_NAME', 'youtube-agent')
 
 server_address = os.getenv('SERVER_ADDRESS', '127.0.0.1')
 client_id = str(uuid.uuid4())
+
+def upload_to_supabase(file_path, filename):
+    """Upload file to Supabase storage and return public URL"""
+    try:
+        # Read the file
+        with open(file_path, 'rb') as f:
+            file_data = f.read()
+        
+        # Construct the storage path
+        storage_path = f"animations/{filename}"
+        
+        # Upload to Supabase storage
+        upload_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET_NAME}/{storage_path}"
+        
+        headers = {
+            'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+            'Content-Type': 'video/mp4',
+            'x-upsert': 'true'  # Overwrite if exists
+        }
+        
+        response = requests.post(upload_url, headers=headers, data=file_data)
+        
+        if response.status_code in [200, 201]:
+            # Construct public URL
+            public_url = f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET_NAME}/{storage_path}"
+            logger.info(f"✅ Successfully uploaded to Supabase: {public_url}")
+            return public_url
+        else:
+            logger.error(f"❌ Supabase upload failed: {response.status_code} - {response.text}")
+            raise Exception(f"Supabase upload failed: {response.text}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error uploading to Supabase: {e}")
+        raise
 
 def download_file_from_url(url, output_path):
     """Function to download file from URL"""
@@ -135,24 +173,9 @@ def get_videos(ws, prompt, input_type="image", person_count="single"):
         videos_output = []
         if 'gifs' in node_output:
             for video in node_output['gifs']:
-                # Upload to RunPod S3 and get full URL
-                try:
-                    # Try upload_file which returns full URL
-                    video_url = rp_upload.upload_file(
-                        file_path=video['fullpath'],
-                        file_name=f"output_{uuid.uuid4()}.mp4"
-                    )
-                except Exception as e:
-                    logger.warning(f"upload_file failed: {e}, trying upload_file_to_bucket")
-                    # Fallback to upload_file_to_bucket
-                    bucket_path = rp_upload.upload_file_to_bucket(
-                        file_name=f"output_{uuid.uuid4()}.mp4",
-                        file_location=video['fullpath']
-                    )
-                    # Construct full URL from bucket path
-                    video_url = f"https://{os.getenv('RUNPOD_POD_ID', 'runpod')}.runpod.io/{bucket_path}"
-                
-                logger.info(f"Video uploaded: {video_url}")
+                # Upload to Supabase storage
+                filename = f"output_{uuid.uuid4()}.mp4"
+                video_url = upload_to_supabase(video['fullpath'], filename)
                 videos_output.append(video_url)
         output_videos[node_id] = videos_output
 
