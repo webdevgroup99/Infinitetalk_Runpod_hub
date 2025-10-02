@@ -56,12 +56,6 @@ RUN wget https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-b
 RUN wget https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors -O /ComfyUI/models/clip_vision/clip_vision_h.safetensors
 RUN wget https://huggingface.co/Kijai/MelBandRoFormer_comfy/resolve/main/MelBandRoformer_fp16.safetensors -O /ComfyUI/models/diffusion_models/MelBandRoformer_fp16.safetensors
 
-# Pre-download Qwen audio model to avoid 90-second delay on first request
-RUN python -c "from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC; \
-    model_name='TencentGameMate/chinese-wav2vec2-base'; \
-    Wav2Vec2Processor.from_pretrained(model_name); \
-    Wav2Vec2ForCTC.from_pretrained(model_name)"
-
 COPY . .
 RUN chmod +x /entrypoint.sh
 
