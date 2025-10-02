@@ -207,7 +207,7 @@ def calculate_max_frames_from_audio(wav_path, wav_path_2=None, fps=25):
     
     # Calculate max_frames based on longest audio duration
     max_duration = max(durations)
-    max_frames = int(max_duration * fps) + 81
+    max_frames = int(max_duration * fps) + 25  # Reduced padding from 81 to 25 for faster generation
     
     logger.info(f"Longest audio duration: {max_duration:.2f} seconds, calculated max_frames: {max_frames}")
     return max_frames
@@ -279,11 +279,11 @@ def handler(job):
             wav_path_2 = wav_path
             logger.info("No second audio provided, using first audio")
 
-    # Validate required fields and set default values
+    # Validate required fields and set default values (optimized for fast cartoon animations)
     prompt_text = job_input.get("prompt", "A person talking naturally")
-    width = job_input.get("width", 512)
-    height = job_input.get("height", 512)
-    steps = job_input.get("steps", 4)  # Default to 4 for faster generation (30-40% faster than 6)
+    width = job_input.get("width", 384)  # Lower resolution for faster generation
+    height = job_input.get("height", 384)  # Lower resolution for faster generation
+    steps = job_input.get("steps", 4)  # 4 steps = 30-40% faster than 6
     
     # Set max_frame (auto-calculate based on audio duration if not provided)
     max_frame = job_input.get("max_frame")
