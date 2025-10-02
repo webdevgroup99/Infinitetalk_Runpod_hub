@@ -82,23 +82,8 @@ def process_input(input_data, temp_dir, output_filename, input_type):
 
 def queue_prompt(prompt, input_type="image", person_count="single"):
     url = f"http://{server_address}:8188/prompt"
-    logger.info(f"Queueing prompt to: {url}")
     p = {"prompt": prompt, "client_id": client_id}
     data = json.dumps(p).encode('utf-8')
-    
-    # Log workflow content for debugging
-    logger.info(f"Number of workflow nodes: {len(prompt)}")
-    if input_type == "image":
-        logger.info(f"Image node (284) setting: {prompt.get('284', {}).get('inputs', {}).get('image', 'NOT_FOUND')}")
-    else:
-        logger.info(f"Video node (228) setting: {prompt.get('228', {}).get('inputs', {}).get('video', 'NOT_FOUND')}")
-    logger.info(f"Audio node (125) setting: {prompt.get('125', {}).get('inputs', {}).get('audio', 'NOT_FOUND')}")
-    logger.info(f"Text node (241) setting: {prompt.get('241', {}).get('inputs', {}).get('positive_prompt', 'NOT_FOUND')}")
-    if person_count == "multi":
-        if "307" in prompt:
-            logger.info(f"Second audio node (307) setting: {prompt.get('307', {}).get('inputs', {}).get('audio', 'NOT_FOUND')}")
-        elif "313" in prompt:
-            logger.info(f"Second audio node (313) setting: {prompt.get('313', {}).get('inputs', {}).get('audio', 'NOT_FOUND')}")
     
     req = urllib.request.Request(url, data=data)
     req.add_header('Content-Type', 'application/json')
@@ -150,10 +135,13 @@ def get_videos(ws, prompt, input_type="image", person_count="single"):
         videos_output = []
         if 'gifs' in node_output:
             for video in node_output['gifs']:
-                # Read file directly using fullpath and encode to base64
-                with open(video['fullpath'], 'rb') as f:
-                    video_data = base64.b64encode(f.read()).decode('utf-8')
-                videos_output.append(video_data)
+                # Upload to RunPod S3 instead of base64 encoding
+                video_url = rp_upload.upload_file_to_bucket(
+                    file_name=f"output_{uuid.uuid4()}.mp4",
+                    file_location=video['fullpath']
+                )
+                logger.info(f"Video uploaded to S3: {video_url}")
+                videos_output.append(video_url)
         output_videos[node_id] = videos_output
 
     return output_videos
@@ -214,19 +202,15 @@ def calculate_max_frames_from_audio(wav_path, wav_path_2=None, fps=25):
 
 def handler(job):
     job_input = job.get("input", {})
-
-    logger.info(f"Received job input: {job_input}")
+    logger.info(f"Processing job: {job_input.get('input_type', 'image')}, {job_input.get('person_count', 'single')}")
     task_id = f"task_{uuid.uuid4()}"
 
     # Check input type and person count
     input_type = job_input.get("input_type", "image")  # "image" or "video"
     person_count = job_input.get("person_count", "single")  # "single" or "multi"
-    
-    logger.info(f"Workflow type: {input_type}, person count: {person_count}")
 
     # Determine workflow file path
     workflow_path = get_workflow_path(input_type, person_count)
-    logger.info(f"Workflow to use: {workflow_path}")
 
     # Process image/video input
     media_path = None
@@ -287,40 +271,24 @@ def handler(job):
     prompt_text = job_input.get("prompt", "A person talking naturally")
     width = job_input.get("width", 512)
     height = job_input.get("height", 512)
+    steps = job_input.get("steps", 6)  # Allow user to configure steps (4-6)
     
     # Set max_frame (auto-calculate based on audio duration if not provided)
     max_frame = job_input.get("max_frame")
     if max_frame is None:
-        logger.info("max_frame not provided. Auto-calculating based on audio duration.")
         max_frame = calculate_max_frames_from_audio(wav_path, wav_path_2 if person_count == "multi" else None)
-    else:
-        logger.info(f"User-specified max_frame: {max_frame}")
     
-    logger.info(f"Workflow settings: prompt='{prompt_text}', width={width}, height={height}, max_frame={max_frame}")
-    logger.info(f"Media path: {media_path}")
-    logger.info(f"Audio path: {wav_path}")
-    if person_count == "multi":
-        logger.info(f"Second audio path: {wav_path_2}")
+    logger.info(f"Settings: {width}x{height}, steps={steps}, max_frame={max_frame}")
 
     prompt = load_workflow(workflow_path)
 
     # Check file existence
     if not os.path.exists(media_path):
-        logger.error(f"Media file does not exist: {media_path}")
         return {"error": f"Media file not found: {media_path}"}
-    
     if not os.path.exists(wav_path):
-        logger.error(f"Audio file does not exist: {wav_path}")
         return {"error": f"Audio file not found: {wav_path}"}
-    
     if person_count == "multi" and wav_path_2 and not os.path.exists(wav_path_2):
-        logger.error(f"Second audio file does not exist: {wav_path_2}")
         return {"error": f"Second audio file not found: {wav_path_2}"}
-    
-    logger.info(f"Media file size: {os.path.getsize(media_path)} bytes")
-    logger.info(f"Audio file size: {os.path.getsize(wav_path)} bytes")
-    if person_count == "multi" and wav_path_2:
-        logger.info(f"Second audio file size: {os.path.getsize(wav_path_2)} bytes")
 
     # Configure workflow nodes
     if input_type == "image":
@@ -335,8 +303,11 @@ def handler(job):
     prompt["241"]["inputs"]["positive_prompt"] = prompt_text
     prompt["245"]["inputs"]["value"] = width
     prompt["246"]["inputs"]["value"] = height
-    
     prompt["270"]["inputs"]["value"] = max_frame
+    
+    # Set generation steps (node 128 is the sampler)
+    if "128" in prompt:
+        prompt["128"]["inputs"]["steps"] = steps
     
     # Configure second audio for multi-person
     if person_count == "multi":
@@ -349,47 +320,42 @@ def handler(job):
                 prompt["313"]["inputs"]["audio"] = wav_path_2
 
     ws_url = f"ws://{server_address}:8188/ws?clientId={client_id}"
-    logger.info(f"Connecting to WebSocket: {ws_url}")
-    
-    # First check if HTTP connection is possible
     http_url = f"http://{server_address}:8188/"
-    logger.info(f"Checking HTTP connection to: {http_url}")
     
-    # Check HTTP connection (max 3 minutes)
-    max_http_attempts = 180
+    # Check HTTP connection (max 30 seconds)
+    max_http_attempts = 30
     for http_attempt in range(max_http_attempts):
         try:
             import urllib.request
             response = urllib.request.urlopen(http_url, timeout=5)
-            logger.info(f"HTTP connection successful (attempt {http_attempt+1})")
+            logger.info(f"HTTP connection successful")
             break
         except Exception as e:
-            logger.warning(f"HTTP connection failed (attempt {http_attempt+1}/{max_http_attempts}): {e}")
             if http_attempt == max_http_attempts - 1:
                 raise Exception("Cannot connect to ComfyUI server. Please verify the server is running.")
             time.sleep(1)
     
     ws = websocket.WebSocket()
-    # Attempt WebSocket connection (max 3 minutes)
-    max_attempts = int(180/5)  # 3 minutes (attempt every 5 seconds)
+    # Attempt WebSocket connection (max 10 seconds)
+    max_attempts = 10
     for attempt in range(max_attempts):
         import time
         try:
             ws.connect(ws_url)
-            logger.info(f"WebSocket connection successful (attempt {attempt+1})")
+            logger.info(f"WebSocket connected")
             break
         except Exception as e:
-            logger.warning(f"WebSocket connection failed (attempt {attempt+1}/{max_attempts}): {e}")
             if attempt == max_attempts - 1:
-                raise Exception("WebSocket connection timeout (3 minutes)")
-            time.sleep(5)
+                raise Exception("WebSocket connection timeout")
+            time.sleep(1)
     videos = get_videos(ws, prompt, input_type, person_count)
     ws.close()
 
-    # Handle case when video is not found
+    # Return video URL
     for node_id in videos:
         if videos[node_id]:
-            return {"video": videos[node_id][0]}
+            logger.info(f"Video generation complete")
+            return {"video_url": videos[node_id][0]}
     
     return {"error": "Video not found"}
 
