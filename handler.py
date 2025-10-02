@@ -135,12 +135,24 @@ def get_videos(ws, prompt, input_type="image", person_count="single"):
         videos_output = []
         if 'gifs' in node_output:
             for video in node_output['gifs']:
-                # Upload to RunPod S3 instead of base64 encoding
-                video_url = rp_upload.upload_file_to_bucket(
-                    file_name=f"output_{uuid.uuid4()}.mp4",
-                    file_location=video['fullpath']
-                )
-                logger.info(f"Video uploaded to S3: {video_url}")
+                # Upload to RunPod S3 and get full URL
+                try:
+                    # Try upload_file which returns full URL
+                    video_url = rp_upload.upload_file(
+                        file_path=video['fullpath'],
+                        file_name=f"output_{uuid.uuid4()}.mp4"
+                    )
+                except Exception as e:
+                    logger.warning(f"upload_file failed: {e}, trying upload_file_to_bucket")
+                    # Fallback to upload_file_to_bucket
+                    bucket_path = rp_upload.upload_file_to_bucket(
+                        file_name=f"output_{uuid.uuid4()}.mp4",
+                        file_location=video['fullpath']
+                    )
+                    # Construct full URL from bucket path
+                    video_url = f"https://{os.getenv('RUNPOD_POD_ID', 'runpod')}.runpod.io/{bucket_path}"
+                
+                logger.info(f"Video uploaded: {video_url}")
                 videos_output.append(video_url)
         output_videos[node_id] = videos_output
 
@@ -271,7 +283,7 @@ def handler(job):
     prompt_text = job_input.get("prompt", "A person talking naturally")
     width = job_input.get("width", 512)
     height = job_input.get("height", 512)
-    steps = job_input.get("steps", 6)  # Allow user to configure steps (4-6)
+    steps = job_input.get("steps", 4)  # Default to 4 for faster generation (30-40% faster than 6)
     
     # Set max_frame (auto-calculate based on audio duration if not provided)
     max_frame = job_input.get("max_frame")
