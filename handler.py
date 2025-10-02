@@ -281,8 +281,8 @@ def handler(job):
 
     # Validate required fields and set default values (optimized for fast cartoon animations)
     prompt_text = job_input.get("prompt", "A person talking naturally")
-    width = job_input.get("width", 384)  # Lower resolution for faster generation
-    height = job_input.get("height", 384)  # Lower resolution for faster generation
+    width = job_input.get("width", 512)
+    height = job_input.get("height", 512)
     steps = job_input.get("steps", 4)  # 4 steps = 30-40% faster than 6
     
     # Set max_frame (auto-calculate based on audio duration if not provided)
