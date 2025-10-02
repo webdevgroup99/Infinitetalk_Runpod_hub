@@ -56,6 +56,9 @@ RUN wget https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/umt5-xxl-enc-b
 RUN wget https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors -O /ComfyUI/models/clip_vision/clip_vision_h.safetensors
 RUN wget https://huggingface.co/Kijai/MelBandRoFormer_comfy/resolve/main/MelBandRoformer_fp16.safetensors -O /ComfyUI/models/diffusion_models/MelBandRoformer_fp16.safetensors
 
+# Cache busting - change this date to force rebuild: 2025-10-02-14:30
+ARG CACHE_BUST=2025-10-02-14:30
+RUN echo "Cache bust: $CACHE_BUST"
 
 COPY . .
 RUN chmod +x /entrypoint.sh
